@@ -57,8 +57,4 @@ runs:
           fi
         done
       env:
-        GITHUB_TOKEN: ${{ inputs.github-token }}
-
-    - name: Feedback de limpeza
-      if: success()
-      run: echo "Limpeza concluída. Branches mescladas na base foram removidas."
+        GITHUB_TOKEN: ${{ inputs.github-token }}   
