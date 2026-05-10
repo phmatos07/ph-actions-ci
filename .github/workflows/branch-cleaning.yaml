@@ -11,7 +11,12 @@ jobs:
     permissions:
       contents: write # Necessário para deletar branches remotas
     steps:
-      - name: Executar Composite Action de limpeza de branches
-        uses: ./.github/actions/branch-cleaning
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Executar Composite Action de limpeza de branches
+      uses: ./.github/actions/branch-cleaning
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
