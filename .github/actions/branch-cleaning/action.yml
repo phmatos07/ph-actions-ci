@@ -1,0 +1,64 @@
+name: Branch Cleaning
+
+description: "Limpa branches remotas totalmente mescladas em um branch base."
+
+inputs:
+  base-branch:
+    description: "Branch base usada para verificar merges."
+    default: master
+  protected-branches:
+    description: "Lista de branches protegidas que não serão removidas, separadas por vírgula."
+    default: "main,master,develop,homolog"
+  github-token:
+    description: "Token para permitir exclusão de branches remotas."
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Checkout com histórico completo
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Deletar branches sem commits à frente da base
+      shell: bash
+      run: |
+        git fetch --prune origin
+
+        PROTECTED_BRANCHES="${{ inputs.protected-branches }}"
+        BASE_BRANCH="${{ inputs.base-branch }}"
+
+        MERGED_BRANCHES=$(git branch -r --merged origin/"$BASE_BRANCH" \
+          | grep -v 'HEAD' \
+          | sed 's|^ *origin/||')
+
+        if [ -z "$MERGED_BRANCHES" ]; then
+          echo "Nenhuma branch mesclada encontrada."
+          exit 0
+        fi
+
+        IFS=',' read -r -a PROTECTED_ARRAY <<< "$PROTECTED_BRANCHES"
+
+        for branch in $MERGED_BRANCHES; do
+          PROTECTED=false
+          for p in "${PROTECTED_ARRAY[@]}"; do
+            if [ "$branch" = "$p" ]; then
+              PROTECTED=true
+              break
+            fi
+          done
+
+          if [ "$PROTECTED" = "true" ]; then
+            echo "Branch protegida, ignorando: $branch"
+          else
+            echo "Deletando branch mesclada: $branch"
+            git push origin --delete "$branch"
+          fi
+        done
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+
+    - name: Feedback de limpeza
+      if: success()
+      run: echo "Limpeza concluída. Branches mescladas na base foram removidas."
