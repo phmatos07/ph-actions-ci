@@ -12,7 +12,7 @@
 set -euo pipefail
 
 BASE_BRANCH="${1:-master}"
-PROTECTED_BRANCHES="${2:-main,master,develop,homolog}"
+PROTECTED_BRANCHES="${2:-main,master,develop}"
 
 echo "🔍 Verificando branches mescladas em '$BASE_BRANCH'..."
 echo "🛡️  Branches protegidas: $PROTECTED_BRANCHES"
