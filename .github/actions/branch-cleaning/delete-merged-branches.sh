@@ -1,6 +1,11 @@
 #!/bin/bash
 #
-# Script para deletar branches remotas que foram mescladas ou estão desatualizadas em relação a um branch base.
+# Script para deletar branches remotas desatualizadas sem novos commits.
+#
+# Lógica:
+#   - Verifica se a branch está desatualizada em relação ao master
+#   - Verifica se existem commits únicos na branch que não estão no master
+#   - Só deleta se estiver desatualizada E não tiver novos commits
 #
 # Uso: ./delete-merged-branches.sh <base_branch> <protected_branches>
 #
@@ -8,100 +13,136 @@
 #   base_branch: Branch base para verificar merges (padrão: master)
 #   protected_branches: Lista de branches protegidas separadas por vírgula
 #
-# O script deleta branches que:
-#   1. Foram completamente mescladas em BASE_BRANCH (git merge)
-#   2. Não têm commits únicos em relação a BASE_BRANCH (desatualizadas)
-#
 
-set -euo pipefail
+set -u
 
 BASE_BRANCH="${1:-master}"
-PROTECTED_BRANCHES="${2:-main,master,develop}"
+PROTECTED_BRANCHES="${2:-main,master,develop,homolog}"
 
-echo "🔍 Verificando branches mescladas ou desatualizadas em '$BASE_BRANCH'..."
+# Arrays para tracking de resultados
+declare -a DELETED_BRANCHES=()
+declare -a PROTECTED_BRANCHES_SKIPPED=()
+declare -a UNIQUE_COMMITS_BRANCHES=()
+declare -a ERROR_BRANCHES=()
+
+echo "🔍 Verificando branches desatualizadas em '$BASE_BRANCH'..."
 echo "🛡️  Branches protegidas: $PROTECTED_BRANCHES"
 echo ""
 
-# Buscar atualizações do repositório remoto
-git fetch --prune origin
+# Atualizar referências remotas
+git fetch --prune origin 2>/dev/null || true
+
+# Obter lista de branches remotas (excluindo HEAD e a base)
+echo "📊 Analisando branches remotas..."
+REMOTE_BRANCHES=$(git branch -r \
+  | grep -v 'HEAD' \
+  | sed 's|^ *origin/||' \
+  | grep -v "^$BASE_BRANCH$" \
+  | sort) || true
+
+if [ -z "$REMOTE_BRANCHES" ]; then
+  echo "✅ Nenhuma branch remota para analisar."
+  exit 0
+fi
+
+echo "📋 Branches encontradas:"
+echo "$REMOTE_BRANCHES" | sed 's/^/   • /'
+echo ""
 
 # Converter lista de branches protegidas em array
 IFS=',' read -r -a PROTECTED_ARRAY <<< "$PROTECTED_BRANCHES"
 
-DELETED_COUNT=0
-PROTECTED_COUNT=0
-SKIPPED_COUNT=0
+echo "🔄 Processando branches..."
+echo ""
 
-# Obter lista de todas as branches remotas (excluindo HEAD)
-ALL_BRANCHES=$(git branch -r \
-  | grep -v 'HEAD' \
-  | sed 's|^ *origin/||' \
-  | grep -v "^$BASE_BRANCH$") || true
-
-if [ -z "$ALL_BRANCHES" ]; then
-  echo "✅ Nenhuma branch encontrada para verificação."
-  exit 0
-fi
-
-# Função para verificar se a branch está protegida
-is_protected() {
-  local branch="$1"
-  for protected_branch in "${PROTECTED_ARRAY[@]}"; do
-    protected_branch=$(echo "$protected_branch" | xargs) # Trim whitespace
-    if [ "$branch" = "$protected_branch" ]; then
-      return 0
-    fi
-  done
-  return 1
-}
-
-# Função para verificar se a branch tem commits únicos em relação à base
-has_unique_commits() {
-  local branch="$1"
-  local base="$2"
-  
-  # Contar commits únicos na branch que não estão na base
-  local unique_commits=$(git rev-list --left-only --count "origin/$base...origin/$branch" 2>/dev/null || echo "0")
-  
-  if [ "$unique_commits" -gt 0 ]; then
-    return 0 # Tem commits únicos
-  else
-    return 1 # Não tem commits únicos (está desatualizada ou mesclada)
-  fi
-}
-
-# Iterar sobre todas as branches
+# Iterar sobre branches remotas
 while IFS= read -r branch; do
   if [ -z "$branch" ]; then
     continue
   fi
 
   # Verificar se a branch está protegida
-  if is_protected "$branch"; then
-    echo "🛡️  Branch protegida, ignorando: $branch"
-    ((PROTECTED_COUNT++))
+  IS_PROTECTED=false
+  for protected_branch in "${PROTECTED_ARRAY[@]}"; do
+    protected_branch=$(echo "$protected_branch" | xargs) # Trim whitespace
+    if [ "$branch" = "$protected_branch" ]; then
+      IS_PROTECTED=true
+      break
+    fi
+  done
+
+  if [ "$IS_PROTECTED" = "true" ]; then
+    PROTECTED_BRANCHES_SKIPPED+=("$branch")
     continue
   fi
 
-  # Verificar se a branch tem commits únicos
-  if ! has_unique_commits "$branch" "$BASE_BRANCH"; then
-    # Branch não tem commits únicos = está mesclada ou desatualizada
-    echo "🗑️  Deletando branch: $branch (sem commits únicos em relação a $BASE_BRANCH)"
-    git push origin --delete "$branch" 2>/dev/null || {
-      echo "⚠️  Erro ao deletar $branch"
-      ((SKIPPED_COUNT++))
-      continue
-    }
-    ((DELETED_COUNT++))
-  else
-    # Branch tem commits únicos = mantém
-    echo "✅ Branch mantida (tem commits únicos): $branch"
-    ((SKIPPED_COUNT++))
+  # Verificar se a branch está desatualizada (seus commits estão em master)
+  IS_MERGED=$(git merge-base --is-ancestor "origin/$branch" "origin/$BASE_BRANCH" && echo "true" || echo "false")
+
+  if [ "$IS_MERGED" = "false" ]; then
+    # Branch não foi mesclada ainda, pular
+    continue
   fi
-done <<< "$ALL_BRANCHES"
+
+  # Verificar se há commits únicos na branch que não estão em master
+  UNIQUE_COMMITS=$(git log "origin/$BASE_BRANCH..origin/$branch" --oneline 2>/dev/null | wc -l)
+
+  if [ "$UNIQUE_COMMITS" -gt 0 ]; then
+    # Branch tem commits únicos, não deletar
+    UNIQUE_COMMITS_BRANCHES+=("$branch ($UNIQUE_COMMITS commit(s))")
+  else
+    # Branch está desatualizada e sem novos commits, pode deletar
+    if git push origin --delete "$branch" 2>/dev/null; then
+      DELETED_BRANCHES+=("$branch")
+    else
+      ERROR_BRANCHES+=("$branch")
+    fi
+  fi
+done <<< "$REMOTE_BRANCHES"
 
 echo ""
-echo "📊 Resumo:"
-echo "  ✅ Branches deletadas: $DELETED_COUNT"
-echo "  ✨ Branches mantidas (com commits): $SKIPPED_COUNT"
-echo "  🛡️  Branches protegidas: $PROTECTED_COUNT"
+echo "════════════════════════════════════════════════════════════"
+echo "📊 RELATÓRIO FINAL DE LIMPEZA"
+echo "════════════════════════════════════════════════════════════"
+echo ""
+
+# Branches deletadas
+if [ ${#DELETED_BRANCHES[@]} -gt 0 ]; then
+  echo "✅ Branches deletadas: ${#DELETED_BRANCHES[@]}"
+  for branch in "${DELETED_BRANCHES[@]}"; do
+    echo "   • $branch"
+  done
+  echo ""
+fi
+
+# Branches protegidas
+if [ ${#PROTECTED_BRANCHES_SKIPPED[@]} -gt 0 ]; then
+  echo "🛡️  Branches protegidas (não deletadas): ${#PROTECTED_BRANCHES_SKIPPED[@]}"
+  for branch in "${PROTECTED_BRANCHES_SKIPPED[@]}"; do
+    echo "   • $branch"
+  done
+  echo ""
+fi
+
+# Branches com commits únicos
+if [ ${#UNIQUE_COMMITS_BRANCHES[@]} -gt 0 ]; then
+  echo "⚠️  Branches com commits únicos (não deletadas): ${#UNIQUE_COMMITS_BRANCHES[@]}"
+  for branch in "${UNIQUE_COMMITS_BRANCHES[@]}"; do
+    echo "   • $branch"
+  done
+  echo ""
+fi
+
+# Branches com erro
+if [ ${#ERROR_BRANCHES[@]} -gt 0 ]; then
+  echo "❌ Branches com erro na exclusão: ${#ERROR_BRANCHES[@]}"
+  for branch in "${ERROR_BRANCHES[@]}"; do
+    echo "   • $branch (pode estar protegida no GitHub)"
+  done
+  echo ""
+fi
+
+echo "════════════════════════════════════════════════════════════"
+echo ""
+echo "✨ Processo finalizado com sucesso!"
+echo ""

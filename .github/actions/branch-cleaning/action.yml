@@ -1,12 +1,12 @@
 name: 'Branch Cleaning'
 
-description: 'Limpa branches remotas totalmente mescladas em um branch base.'
+description: 'Limpa branches remotas desatualizadas que não possuem novos commits em relação a master.'
 
 author: 'VendeMais Team'
 
 inputs:
   base-branch:
-    description: 'Branch base usada para verificar merges.'
+    description: 'Branch base usada para verificar atualizações.'
     required: false
     default: 'master'
 
@@ -23,12 +23,13 @@ runs:
   using: composite
 
   steps:
-    - name: Checkout com histórico completo
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
+    - name: Preparar ambiente
+      shell: bash
+      run: |
+        git fetch --prune origin
+        echo "✅ Repositório atualizado"
 
-    - name: Executar script de limpeza de branches
+    - name: Executar limpeza de branches
       shell: bash
       run: bash ${{ github.action_path }}/delete-merged-branches.sh "${{ inputs.base-branch }}" "${{ inputs.protected-branches }}"
       env:
