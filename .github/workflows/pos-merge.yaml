@@ -3,24 +3,27 @@ name: Pós-Merge
 on:
   push:
     branches:
-      - master # Executa apenas quando há merge na master
+      - master
 
 jobs:
   cleanup_merged_branches:
+    name: Delete Merged Branches
     runs-on: ubuntu-latest
+    
     permissions:
-      contents: write # Necessário para deletar branches remotas
+      contents: write
+
     steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-    - name: Executar Composite Action de limpeza de branches
-      uses: ./.github/actions/branch-cleaning
-      with:
-        github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Executar Composite Action de limpeza de branches
+        uses: ./.github/actions/branch-cleaning
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Feedback da execução
-      if: success()
-      run: echo "Limpeza concluída. Branches mescladas na base foram removidas."  
+      - name: Feedback da execução
+        if: success()
+        run: echo "✅ Limpeza concluída. Branches mescladas na base foram removidas."
